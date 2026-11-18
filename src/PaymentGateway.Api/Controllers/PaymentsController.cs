@@ -1,6 +1,7 @@
 ﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
+using System.ComponentModel;
 
 using PaymentGateway.Api.Models;
 using PaymentGateway.Api.Models.Requests;
@@ -22,7 +23,14 @@ public class PaymentsController : Controller
         _bankPaymentClient = bankPaymentClient;
     }
 
+    /// <summary>Retrieves a previously processed payment.</summary>
+    /// <param name="id">The payment ID.</param>
+    /// <returns>The masked payment details.</returns>
+    /// <response code="200">Payment found.</response>
+    /// <response code="404">No payment exists for the supplied ID.</response>
     [HttpGet("{id:guid}")]
+    [ProducesResponseType<GetPaymentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public ActionResult<GetPaymentResponse> GetPaymentAsync(Guid id)
     {
         var payment = _paymentsRepository.Get(id);
@@ -46,10 +54,24 @@ public class PaymentsController : Controller
         return Ok(response);
     }
 
+    /// <summary>Processes a card payment through the acquiring bank.</summary>
+    /// <param name="request">The payment and card details.</param>
+    /// <param name="idempotencyKey">An optional key for exactly-once request reuse; 1-64 characters.</param>
+    /// <param name="cancellationToken">Cancels the bank request when the caller aborts.</param>
+    /// <response code="200">Payment authorized or declined.</response>
+    /// <response code="400">The request or idempotency header is invalid.</response>
+    /// <response code="409">The idempotency key is in progress or used with different payment data.</response>
+    /// <response code="502">The acquiring bank is unavailable or returned an invalid response.</response>
+    /// <response code="504">The acquiring bank request timed out.</response>
     [HttpPost]
+    [ProducesResponseType<PostPaymentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    [ProducesResponseType(StatusCodes.Status504GatewayTimeout)]
     public async Task<ActionResult<PostPaymentResponse>> PostPaymentAsync(
         [FromBody] PostPaymentRequest request,
-        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromHeader(Name = "Idempotency-Key"), Description("Optional 1-64 character key for request reuse.")] string? idempotencyKey,
         CancellationToken cancellationToken)
     {
         var reservation = default(IdempotencyReservation);

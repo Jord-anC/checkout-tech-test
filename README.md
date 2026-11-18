@@ -69,16 +69,15 @@ A production implementation would require a durable, shared store with atomic ke
 - In-memory storage is simple and testable but has no persistence, replication, or restart recovery. It is also only local to the one instance of the application. Using an external database would add overhead, latency and more points of failure, but persists data and can be shared between multiple services or instances. For a production-scale application this would be implemented.
 - Request validation uses `IValidatableObject` with DataAnnotations because the current rules are simple and the combined expiry rule is naturally a property of the request. `ApiController` can reject invalid requests automatically with `400 Bad Request` before the bank is called, the rules can be tested directly in `PaymentRequestValidationTests`, and the controller remains focused on payment orchestration under the Single Responsibility Principle. The trade-off is that this approach becomes harder to manage for complex rules and is not as reusable across other entry points; a dedicated validator, shared rule service, or domain service would be preferable if validation grows or needs to be shared.
 
-## Security and future production readiness
+## Future steps for Production-readiness
 
-Before production, add:
-
-- External database.
-- Secrets/configuration management and TLS for bank communication.
+- External database
+- Secrets/configuration management
+- CI/CD pipelines with token replacement
 - Custom domain logging/error messaging standards
-- Metrics for bank latency/outcomes, gateway latency/statuses, retries, idempotency reuse/conflicts, and repository failures.
-- Correlation/tracing identifiers across the merchant request and bank call.
+- Metrics for bank latency/outcomes, gateway latency/statuses, retries, idempotency reuse/conflicts, and repository failures
+- Correlation/tracing identifiers across the merchant request and bank call
 - Alerting, SLOs, dashboards
-- Readiness/liveness checks, external-store health, and bank dependency health.
-- Idempotency store.
-- Compliant handling if any card data is retained beyond request processing.
+- Host application in chosen cloud environment
+- Readiness/liveness checks, external-store health, and bank dependency health
+- Compliant handling if any card data is retained beyond request processing
