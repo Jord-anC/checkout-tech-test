@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Mvc;
 
 using PaymentGateway.Api.Models;
 using PaymentGateway.Api.Models.Requests;
@@ -47,8 +49,37 @@ public class PaymentsController : Controller
     [HttpPost]
     public async Task<ActionResult<PostPaymentResponse>> PostPaymentAsync(
         [FromBody] PostPaymentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken cancellationToken)
     {
+        var reservation = default(IdempotencyReservation);
+
+        if (idempotencyKey is not null)
+        {
+            if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 64)
+            {
+                return BadRequest("Idempotency-Key must contain 1 to 64 characters.");
+            }
+
+            var fingerprint = ComputeRequestFingerprint(request);
+            reservation = _paymentsRepository.TryReserveIdempotencyKey(idempotencyKey, fingerprint);
+
+            if (reservation.Status == IdempotencyReservationStatus.Reused)
+            {
+                return Ok(reservation.Payment);
+            }
+
+            if (reservation.Status == IdempotencyReservationStatus.Conflict)
+            {
+                return Conflict("The Idempotency-Key has already been used with different payment data.");
+            }
+
+            if (reservation.Status == IdempotencyReservationStatus.InProgress)
+            {
+                return Conflict("The payment for this Idempotency-Key is already being processed.");
+            }
+        }
+
         bool authorized;
 
         try
@@ -57,10 +88,12 @@ public class PaymentsController : Controller
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            ReleaseIdempotencyKey(idempotencyKey, request);
             return Problem(statusCode: StatusCodes.Status504GatewayTimeout, title: "Payment processor timed out.");
         }
         catch (HttpRequestException)
         {
+            ReleaseIdempotencyKey(idempotencyKey, request);
             return Problem(statusCode: StatusCodes.Status502BadGateway, title: "Payment processor unavailable.");
         }
 
@@ -77,6 +110,27 @@ public class PaymentsController : Controller
 
         _paymentsRepository.Add(payment);
 
+        if (idempotencyKey is not null)
+        {
+            _paymentsRepository.CompleteIdempotencyKey(idempotencyKey, payment);
+        }
+
         return Ok(payment);
+    }
+
+    private void ReleaseIdempotencyKey(string? idempotencyKey, PostPaymentRequest request)
+    {
+        if (idempotencyKey is not null)
+        {
+            _paymentsRepository.ReleaseIdempotencyKey(idempotencyKey, ComputeRequestFingerprint(request));
+        }
+    }
+
+    private static string ComputeRequestFingerprint(PostPaymentRequest request)
+    {
+        var canonical = string.Join("|", request.CardNumber, request.ExpiryMonth, request.ExpiryYear,
+            request.Currency, request.Amount, request.Cvv);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        return Convert.ToHexString(hash);
     }
 }

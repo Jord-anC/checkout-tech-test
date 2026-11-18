@@ -16,7 +16,7 @@ public class PaymentProcessorTests
         var repository = new TestPaymentsRepository();
         var controller = new PaymentsController(repository, new StubBankPaymentClient(authorized: true));
 
-        var result = await controller.PostPaymentAsync(CreateValidRequest(), CancellationToken.None);
+        var result = await controller.PostPaymentAsync(CreateValidRequest(), null, CancellationToken.None);
 
         var payment = GetPayment(result);
         Assert.Equal(PaymentStatus.Authorized, payment.Status);
@@ -29,7 +29,7 @@ public class PaymentProcessorTests
         var repository = new TestPaymentsRepository();
         var controller = new PaymentsController(repository, new StubBankPaymentClient(authorized: false));
 
-        var result = await controller.PostPaymentAsync(CreateValidRequest(), CancellationToken.None);
+        var result = await controller.PostPaymentAsync(CreateValidRequest(), null, CancellationToken.None);
 
         var payment = GetPayment(result);
         Assert.Equal(PaymentStatus.Declined, payment.Status);
@@ -43,7 +43,7 @@ public class PaymentProcessorTests
         var controller = new PaymentsController(repository, new StubBankPaymentClient(authorized: true));
         var request = CreateValidRequest();
 
-        var result = await controller.PostPaymentAsync(request, CancellationToken.None);
+        var result = await controller.PostPaymentAsync(request, null, CancellationToken.None);
 
         var payment = GetPayment(result);
         var stored = Assert.IsType<PostPaymentResponse>(repository.Get(payment.Id));
@@ -84,5 +84,16 @@ public class PaymentProcessorTests
         public void Add(PostPaymentResponse payment) => _payments[payment.Id] = payment;
 
         public PostPaymentResponse? Get(Guid id) => _payments.GetValueOrDefault(id);
+
+        public IdempotencyReservation TryReserveIdempotencyKey(string key, string requestFingerprint)
+            => new() { Status = IdempotencyReservationStatus.Started };
+
+        public void CompleteIdempotencyKey(string key, PostPaymentResponse payment)
+        {
+        }
+
+        public void ReleaseIdempotencyKey(string key, string requestFingerprint)
+        {
+        }
     }
 }

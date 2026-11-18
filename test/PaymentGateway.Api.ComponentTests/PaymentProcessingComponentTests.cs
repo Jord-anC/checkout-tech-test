@@ -82,6 +82,50 @@ public class PaymentProcessingComponentTests
     }
 
     [Fact]
+    public async Task ReusingIdempotencyKeyForSamePaymentReturnsOriginalPaymentAndDoesNotCallBankAgain()
+    {
+        var bankClient = new StubBankPaymentClient(authorized: true);
+        using var factory = CreateFactory(bankClient);
+        using var client = factory.CreateClient();
+
+        using var firstRequest = CreatePaymentRequest("repeat-payment", CreateValidRequest());
+        var firstResponse = await client.SendAsync(firstRequest);
+        var firstPayment = await firstResponse.Content.ReadFromJsonAsync<PostPaymentResponse>()
+            ?? throw new InvalidOperationException("The first payment response was empty.");
+
+        using var retryRequest = CreatePaymentRequest("repeat-payment", CreateValidRequest());
+        var retryResponse = await client.SendAsync(retryRequest);
+        var retryPayment = await retryResponse.Content.ReadFromJsonAsync<PostPaymentResponse>()
+            ?? throw new InvalidOperationException("The retried payment response was empty.");
+
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, retryResponse.StatusCode);
+        Assert.Equal(firstPayment.Id, retryPayment.Id);
+        Assert.Equal(PaymentStatus.Authorized, retryPayment.Status);
+        Assert.Equal(1, bankClient.Calls);
+    }
+
+    [Fact]
+    public async Task ReusingIdempotencyKeyWithDifferentPaymentReturnsConflict()
+    {
+        var bankClient = new StubBankPaymentClient(authorized: true);
+        using var factory = CreateFactory(bankClient);
+        using var client = factory.CreateClient();
+
+        using var firstRequest = CreatePaymentRequest("conflicting-payment", CreateValidRequest());
+        var firstResponse = await client.SendAsync(firstRequest);
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        var changedRequest = CreateValidRequest();
+        changedRequest.Amount = 1051;
+        using var conflictingRequest = CreatePaymentRequest("conflicting-payment", changedRequest);
+        var conflictResponse = await client.SendAsync(conflictingRequest);
+
+        Assert.Equal(HttpStatusCode.Conflict, conflictResponse.StatusCode);
+        Assert.Equal(1, bankClient.Calls);
+    }
+
+    [Fact]
     public async Task RejectsInvalidPaymentRequestWithoutCallingBank()
     {
         var bankClient = new StubBankPaymentClient(authorized: true);
@@ -163,6 +207,16 @@ public class PaymentProcessingComponentTests
                 services.RemoveAll<IBankPaymentClient>();
                 services.AddSingleton<IBankPaymentClient>(bankClient);
             }));
+
+    private static HttpRequestMessage CreatePaymentRequest(string idempotencyKey, PostPaymentRequest payment)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/Payments")
+        {
+            Content = JsonContent.Create(payment)
+        };
+        request.Headers.Add("Idempotency-Key", idempotencyKey);
+        return request;
+    }
 
     private static PostPaymentRequest CreateValidRequest() => new()
     {
