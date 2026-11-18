@@ -38,7 +38,6 @@ Valid submissions return either `Authorized` or `Declined` with the payment ID, 
 
 ### API design
 
-- Resource routes use `/api/Payments` for creation and retrieval.
 - Validation failures use `400`, upstream outages use `502`, upstream timeouts use `504`, missing payments use `404`, and idempotency conflicts use `409`.
 - Field-level validation messages are explicit and non-sensitive.
 - The public response contains only the last four card digits. Full PAN and CVV values are not stored or returned.
@@ -58,8 +57,6 @@ Retries are intentionally bounded. Payment endpoints should not blindly retry be
 
 ### Storage and idempotency
 
-The repository is an in-memory singleton test double, as allowed by the assessment. It is process-local and suitable for this offline exercise, but it is not durable or shared across application instances.
-
 Idempotency keys are hashed with the complete submitted payment payload and retained alongside the resulting payment response in memory. The fingerprint includes the full card number and CVV only as a local SHA-256 hash and is not logged or returned. The hash allows exact payload reuse/conflict detection without storing a second copy of sensitive request fields.
 
 A production implementation would require a durable, shared store with atomic key reservation, a retention policy, and transaction support. It should also propagate a stable idempotency/reference key to the bank if the bank supports it.
@@ -69,7 +66,6 @@ A production implementation would require a durable, shared store with atomic ke
 - Three currencies were chosen: GBP, USD, and EUR. These are three common currencies which fit well with the minor currency unit requirement. Other currencies like BHD would not work with this rule, so in Production this would require extra mapping or a domain service that could handle these edge cases.
 - The bank's `authorized` Boolean determines the merchant-facing status. `Rejected` is not used for created payment records; invalid input is represented by an HTTP `400` validation response and no payment record.
 - The bank authorization code is not included in merchant responses because it is outside the assessment response contract.
-- The existing Docker-based Mountebank setup is not required for deterministic unit/component tests, which substitute the bank or HTTP handler. It remains useful for manual and contract-style verification.
 - In-memory storage is simple and testable but has no persistence, replication, or restart recovery. It is also only local to the one instance of the application. Using an external database would add overhead, latency and more points of failure, but persists data and can be shared between multiple services or instances. For a production-scale application this would be implemented.
 - Request validation uses `IValidatableObject` with DataAnnotations because the current rules are simple and the combined expiry rule is naturally a property of the request. `ApiController` can reject invalid requests automatically with `400 Bad Request` before the bank is called, the rules can be tested directly in `PaymentRequestValidationTests`, and the controller remains focused on payment orchestration under the Single Responsibility Principle. The trade-off is that this approach becomes harder to manage for complex rules and is not as reusable across other entry points; a dedicated validator, shared rule service, or domain service would be preferable if validation grows or needs to be shared.
 
@@ -77,10 +73,12 @@ A production implementation would require a durable, shared store with atomic ke
 
 Before production, add:
 
+- External database.
 - Secrets/configuration management and TLS for bank communication.
-- A logging policy that excludes PAN, CVV, authorization headers, and full request bodies.
+- Custom domain logging/error messaging standards
 - Metrics for bank latency/outcomes, gateway latency/statuses, retries, idempotency reuse/conflicts, and repository failures.
 - Correlation/tracing identifiers across the merchant request and bank call.
+- Alerting, SLOs, dashboards
 - Readiness/liveness checks, external-store health, and bank dependency health.
-- A durable database and distributed idempotency store.
-- PCI-compliant handling and an appropriate payment vault/tokenization service if any card data is retained beyond request processing.
+- Idempotency store.
+- Compliant handling if any card data is retained beyond request processing.

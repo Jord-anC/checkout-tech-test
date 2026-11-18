@@ -11,13 +11,23 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddSingleton<IPaymentsRepository, PaymentsRepository>();
 
-var bankBaseUrl = builder.Configuration["BankSimulator:BaseUrl"]
-    ?? throw new InvalidOperationException("BankSimulator:BaseUrl must be configured.");
+var bankBaseUrl = builder.Configuration["BankSimulator:BaseUrl"];
 var bankTimeoutSeconds = builder.Configuration.GetValue("BankSimulator:TimeoutSeconds", 5);
 
 builder.Services.AddHttpClient<IBankPaymentClient, BankPaymentClient>(client =>
 {
-    client.BaseAddress = new Uri(bankBaseUrl, UriKind.Absolute);
+    if (string.IsNullOrWhiteSpace(bankBaseUrl) ||
+        !Uri.TryCreate(bankBaseUrl, UriKind.Absolute, out var absoluteBankBaseUrl))
+    {
+        throw new InvalidOperationException("BankSimulator:BaseUrl must be configured as an absolute URL.");
+    }
+
+    if (bankTimeoutSeconds <= 0)
+    {
+        throw new InvalidOperationException("BankSimulator:TimeoutSeconds must be greater than zero.");
+    }
+
+    client.BaseAddress = absoluteBankBaseUrl;
     client.Timeout = TimeSpan.FromSeconds(bankTimeoutSeconds);
 });
 
