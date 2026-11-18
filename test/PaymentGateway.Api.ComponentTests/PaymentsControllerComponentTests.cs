@@ -7,9 +7,9 @@ using PaymentGateway.Api.Controllers;
 using PaymentGateway.Api.Models.Responses;
 using PaymentGateway.Api.Services;
 
-namespace PaymentGateway.Api.IntegrationTests;
+namespace PaymentGateway.Api.ComponentTests;
 
-public class PaymentsControllerTests
+public class PaymentsControllerComponentTests
 {
     private readonly Random _random = new();
     
@@ -23,7 +23,7 @@ public class PaymentsControllerTests
             ExpiryYear = _random.Next(2023, 2030),
             ExpiryMonth = _random.Next(1, 12),
             Amount = _random.Next(1, 10000),
-            CardNumberLastFour = _random.Next(1111, 9999),
+            CardNumberLastFour = _random.Next(1111, 9999).ToString(),
             Currency = "GBP"
         };
 
@@ -33,16 +33,18 @@ public class PaymentsControllerTests
         var webApplicationFactory = new WebApplicationFactory<PaymentsController>();
         var client = webApplicationFactory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services => ((ServiceCollection)services)
-                .AddSingleton(paymentsRepository)))
+                .AddSingleton<IPaymentsRepository>(paymentsRepository)))
             .CreateClient();
 
         // Act
         var response = await client.GetAsync($"/api/Payments/{payment.Id}");
-        var paymentResponse = await response.Content.ReadFromJsonAsync<PostPaymentResponse>();
+        var paymentResponse = await response.Content.ReadFromJsonAsync<GetPaymentResponse>()
+            ?? throw new InvalidOperationException("The payment response was empty.");
         
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(paymentResponse);
+        Assert.Equal(payment.Id, paymentResponse.Id);
+        Assert.Equal(payment.CardNumberLastFour, paymentResponse.CardNumberLastFour);
     }
 
     [Fact]
