@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using PaymentGateway.Api.Models.Bank;
@@ -8,6 +9,8 @@ namespace PaymentGateway.Api.Services;
 
 public sealed class BankPaymentClient(HttpClient httpClient) : IBankPaymentClient
 {
+    private const int MaxRetryAttempts = 2;
+
     public async Task<bool> AuthorizeAsync(PostPaymentRequest payment, CancellationToken cancellationToken)
     {
         var bankRequest = new BankPaymentRequest
@@ -20,20 +23,81 @@ public sealed class BankPaymentClient(HttpClient httpClient) : IBankPaymentClien
             Cvv = payment.Cvv!
         };
 
-        using var response = await httpClient.PostAsJsonAsync("payments", bankRequest, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        HttpResponseMessage? response = null;
 
-        BankPaymentResponse? bankResponse;
-        try
+        for (var attempt = 0; attempt <= MaxRetryAttempts; attempt++)
         {
-            bankResponse = await response.Content.ReadFromJsonAsync<BankPaymentResponse>(
-                cancellationToken: cancellationToken);
-        }
-        catch (JsonException exception)
-        {
-            throw new HttpRequestException("The bank returned an invalid response.", exception);
+            try
+            {
+                response = await httpClient.PostAsJsonAsync("payments", bankRequest, cancellationToken);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    break;
+                }
+
+                if (!IsTransient(response.StatusCode) || attempt == MaxRetryAttempts)
+                {
+                    response.Dispose();
+                    throw new HttpRequestException(
+                        $"The bank returned HTTP {(int)response.StatusCode}.",
+                        null,
+                        response.StatusCode);
+                }
+
+                response.Dispose();
+                await DelayBeforeRetryAsync(attempt, cancellationToken);
+            }
+            catch (HttpRequestException exception) when (
+                exception.StatusCode is null && attempt < MaxRetryAttempts)
+            {
+                await DelayBeforeRetryAsync(attempt, cancellationToken);
+            }
+            catch (TaskCanceledException) when (
+                !cancellationToken.IsCancellationRequested && attempt < MaxRetryAttempts)
+            {
+                await DelayBeforeRetryAsync(attempt, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
         }
 
-        return bankResponse?.Authorized ?? throw new HttpRequestException("The bank returned an invalid response.");
+        if (response is null)
+        {
+            throw new HttpRequestException("The bank request failed after the retry limit.");
+        }
+
+        using (response)
+        {
+            BankPaymentResponse? bankResponse;
+            try
+            {
+                bankResponse = await response.Content.ReadFromJsonAsync<BankPaymentResponse>(
+                    cancellationToken: cancellationToken);
+            }
+            catch (JsonException exception)
+            {
+                throw new HttpRequestException("The bank returned an invalid response.", exception);
+            }
+
+            return bankResponse?.Authorized
+                ?? throw new HttpRequestException("The bank returned an invalid response.");
+        }
+    }
+
+    private static bool IsTransient(HttpStatusCode statusCode) => statusCode is
+        HttpStatusCode.RequestTimeout or
+        HttpStatusCode.TooManyRequests or
+        HttpStatusCode.BadGateway or
+        HttpStatusCode.ServiceUnavailable or
+        HttpStatusCode.GatewayTimeout;
+
+    private static async Task DelayBeforeRetryAsync(int attempt, CancellationToken cancellationToken)
+    {
+        var baseDelayMilliseconds = 100 * (1 << attempt);
+        var jitterMilliseconds = Random.Shared.Next(0, 50);
+        await Task.Delay(baseDelayMilliseconds + jitterMilliseconds, cancellationToken);
     }
 }

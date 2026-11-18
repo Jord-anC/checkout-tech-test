@@ -56,6 +56,76 @@ public class BankPaymentClientTests
     }
 
     [Fact]
+    public async Task RetriesTransientFailureThenReturnsAuthorizationDecision()
+    {
+        var attempt = 0;
+        var handler = new StubHttpMessageHandler((_, _) =>
+        {
+            attempt++;
+            var response = attempt == 1
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new { authorized = true, authorization_code = "bank-reference" })
+                };
+
+            return Task.FromResult(response);
+        });
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") };
+        var bankClient = new BankPaymentClient(httpClient);
+
+        var authorized = await bankClient.AuthorizeAsync(CreateValidRequest(), CancellationToken.None);
+
+        Assert.True(authorized);
+        Assert.Equal(2, attempt);
+    }
+
+    [Fact]
+    public async Task DoesNotRetryPermanentBadRequest()
+    {
+        var attempt = 0;
+        var handler = new StubHttpMessageHandler((_, _) =>
+        {
+            attempt++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+        });
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") };
+        var bankClient = new BankPaymentClient(httpClient);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            bankClient.AuthorizeAsync(CreateValidRequest(), CancellationToken.None));
+
+        Assert.Equal(1, attempt);
+    }
+
+    [Fact]
+    public async Task RetriesTransientNetworkFailureThenSucceeds()
+    {
+        var attempt = 0;
+        var handler = new StubHttpMessageHandler((_, _) =>
+        {
+            attempt++;
+
+            if (attempt == 1)
+            {
+                throw new HttpRequestException("The network connection failed.");
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { authorized = true, authorization_code = "bank-reference" })
+            });
+        });
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://bank.test/") };
+        var bankClient = new BankPaymentClient(httpClient);
+
+        var authorized = await bankClient.AuthorizeAsync(CreateValidRequest(), CancellationToken.None);
+
+        Assert.True(authorized);
+        Assert.Equal(2, attempt);
+    }
+
+    [Fact]
     public async Task ThrowsWhenBankReturnsNonSuccessStatus()
     {
         var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(
